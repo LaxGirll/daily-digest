@@ -1,0 +1,42 @@
+name: Daily Email Digest
+
+on:
+  schedule:
+    # 11:00 UTC = 7am EDT (UTC-4) / 6am EST (UTC-5)
+    # Adjust this if you want a different time.
+    - cron: '0 11 * * *'
+  workflow_dispatch:   # lets you trigger it manually from the Actions tab
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run digest pipeline
+        env:
+          GMAIL_CLIENT_ID:      ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET:  ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN:  ${{ secrets.GMAIL_REFRESH_TOKEN }}
+          ANTHROPIC_API_KEY:    ${{ secrets.ANTHROPIC_API_KEY }}
+          DIGEST_PASSWORD:      ${{ secrets.DIGEST_PASSWORD }}
+        run: python daily_digest.py
+
+      - name: Commit and push index.html
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name  "GitHub Actions"
+          git add index.html
+          # Only commit if index.html actually changed
+          git diff --staged --quiet || git commit -m "digest: $(date +'%A, %B %-d, %Y')"
+          git push
