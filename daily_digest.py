@@ -61,7 +61,7 @@ def fetch_recent_message_ids(gmail):
     since_ts = int((datetime.now(timezone.utc) - timedelta(hours=24)).timestamp())
     result = gmail.users().messages().list(
         userId='me',
-        q=f'after:{since_ts}',
+        q=f'after:{since_ts} -in:spam -in:trash',
         maxResults=MAX_EMAILS,
     ).execute()
     return result.get('messages', [])
@@ -173,6 +173,7 @@ Here are {total} emails received in the last 24 hours.
 Produce a digest in EXACTLY the following format.
 Sections are separated by a line containing only three dashes (---).
 Do not add any text before the first section or after the last.
+Omit any section entirely (including its --- separator) if there is nothing to put in it.
 
 === FORMAT ===
 
@@ -183,6 +184,9 @@ EMAIL COUNT BY CATEGORY
 Newsletters: N emails
 Work: N emails
 Personal: N emails
+Books & Reading: N emails
+Food & Recipes: N emails
+Kids & Family: N emails
 Promotions: N emails
 Notifications: N emails
 Other: N emails
@@ -191,30 +195,49 @@ Other: N emails
 
 NEEDS ATTENTION
 - [One specific, actionable item per line — things genuinely requiring a reply or decision today]
-- [Skip this section entirely if nothing needs attention, but keep the --- separator]
+- [Only include if there are real action items]
 
 ---
 
 NEWSLETTERS — Summaries
-[For each newsletter with substantive content use this exact line pattern:]
+[For each newsletter with substantive content:]
 Sender Name -- "Subject or topic"
 2-3 sentence summary of the key content or insight.
 
-[Repeat for each newsletter. Skip promotional/empty ones.]
+---
+
+BOOKS & READING
+[BookBub deals, NYT books, reading recommendations, book newsletters, library emails, etc.]
+Source Name -- "Title or Deal"
+Brief description — genre, why it's interesting, price if it's a deal.
+
+---
+
+FOOD & RECIPES
+[Recipe newsletters, cooking tips, restaurant deals, food content, meal planning, etc.]
+Source Name -- "Dish or Topic"
+1-2 sentence description of the recipe or food content.
+
+---
+
+KIDS & FAMILY
+[School emails, kids activities, family events, parenting content, kids deals, etc.]
+- [Bullet point summary of each relevant item]
 
 ---
 
 REGULAR EMAIL SUMMARY
-[Short grouped summary of non-newsletter emails that don't need action.
+[Short grouped summary of remaining non-newsletter emails that don't need action.
 Use bullet points grouped by theme, e.g. Work Updates, Notifications, etc.]
 
 === END FORMAT ===
 
 Rules:
 - Keep summaries tight and useful.
-- Only flag real action items (replies needed, decisions, deadlines).
-- Ignore promotional emails and automated notifications in the newsletter section.
+- Only flag real action items in NEEDS ATTENTION (replies needed, decisions, deadlines).
+- Skip promotional emails with no real content.
 - Use the exact --- separator lines between sections.
+- If a section has no emails, omit it completely — do not include an empty section.
 """
 
     # Use streaming (large input) and get the final message text
