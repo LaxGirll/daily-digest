@@ -9,9 +9,13 @@ Usage: python3 publish_digest.py "digest text"
 Output: JSON to stdout with {api_url, token, commit_message, content_b64, site_url}
 """
 
-import sys, os, json, base64, hashlib, subprocess, tempfile
+import sys, os, json, base64, hashlib, subprocess, tempfile, html as html_mod
 from pathlib import Path
 from datetime import datetime
+
+def _e(s):
+    """HTML-escape a string."""
+    return html_mod.escape(str(s))
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 CONFIG_PATH = Path(__file__).parent / ".digest-config"
@@ -29,9 +33,26 @@ PASSWORD     = os.environ.get("DIGEST_PASSWORD") or config.get("DIGEST_PASSWORD"
 
 # ── Digest content ─────────────────────────────────────────────────────────────
 if len(sys.argv) > 1:
-    digest_text = " ".join(sys.argv[1:])
+    raw_input = " ".join(sys.argv[1:])
 else:
-    digest_text = sys.stdin.read()
+    raw_input = sys.stdin.read()
+
+# Detect structured JSON input from daily_digest.py
+try:
+    _data          = json.loads(raw_input)
+    digest_text    = _data.get("digest_text", "")
+    _gmail_creds   = _data.get("gmail_creds", {})
+    _needs_attn    = _data.get("needs_attention", [])
+    _promotions    = _data.get("promotions", [])
+    _notifications = _data.get("notifications", [])
+    _gmail_labels  = _data.get("gmail_labels", {})
+except (json.JSONDecodeError, TypeError):
+    digest_text    = raw_input
+    _gmail_creds   = {}
+    _needs_attn    = []
+    _promotions    = []
+    _notifications = []
+    _gmail_labels  = {}
 
 date_str = datetime.now().strftime("%A, %B %-d, %Y")
 
@@ -61,6 +82,23 @@ CSS = (
     ".attn{background:#fffbeb;border-left:3px solid #f59e0b;border-radius:0 6px 6px 0;"
     "padding:10px 14px;margin-bottom:8px;font-size:.88rem;line-height:1.5;}"
     ".attn:last-child{margin-bottom:0;}"
+    # Interactive action items
+    ".aitem{display:flex;align-items:flex-start;gap:10px;padding:10px 0;"
+    "border-bottom:1px solid #f0f0f0;transition:opacity .3s;}"
+    ".aitem:last-child{border-bottom:none;}"
+    ".aitem.done .atext{text-decoration:line-through;color:#aaa;}"
+    ".aitem input[type=checkbox]{margin-top:3px;width:16px;height:16px;flex-shrink:0;cursor:pointer;}"
+    ".aitem-body{flex:1;min-width:0;}"
+    ".atext{font-size:.88rem;line-height:1.5;color:#1a1a2e;}"
+    ".ameta{font-size:.75rem;color:#aaa;margin-top:2px;}"
+    ".abtns{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;}"
+    ".btn-trash{background:#fff1f0;color:#cf1322;border:1px solid #ffd6d6;"
+    "border-radius:6px;padding:3px 10px;font-size:.75rem;cursor:pointer;}"
+    ".btn-trash:hover{background:#ffd6d6;}"
+    ".btn-trash:disabled{opacity:.5;cursor:default;}"
+    ".lbl-select{font-size:.75rem;border:1px solid #e5e7eb;border-radius:6px;"
+    "padding:3px 6px;color:#666;cursor:pointer;max-width:160px;}"
+    ".moved-tag{font-size:.75rem;color:#4f46e5;margin-left:4px;}"
     ".nl{padding-bottom:18px;margin-bottom:18px;border-bottom:1px solid #f0f0f0;}"
     ".nl:last-child{padding-bottom:0;margin-bottom:0;border-bottom:none;}"
     ".nl-head{margin-bottom:6px;}"
@@ -154,6 +192,102 @@ document.getElementById('digest').innerHTML=renderDigest(D);"""
 
 js = JS_TMPL.replace('PAYLOAD_JSON', json.dumps(digest_text))
 
+# ── Gmail API JS (only when credentials are present) ───────────────────────────
+GMAIL_JS = ""
+if _gmail_creds:
+    GMAIL_JS = (
+        "var GC=" + json.dumps(_gmail_creds) + ";"
+        "var _gt=null,_ge=0;"
+        "async function getGT(){"
+        "if(_gt&&Date.now()<_ge)return _gt;"
+        "const r=await fetch('https://oauth2.googleapis.com/token',{"
+        "method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},"
+        "body:new URLSearchParams({client_id:GC.ci,client_secret:GC.cs,"
+        "refresh_token:GC.rt,grant_type:'refresh_token'})});"
+        "const d=await r.json();_gt=d.access_token;_ge=Date.now()+(d.expires_in-60)*1000;return _gt;}"
+        "async function trashEmail(id,btn){"
+        "const el=btn.closest('.aitem');btn.textContent='...';btn.disabled=true;"
+        "try{const t=await getGT();"
+        "await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/'+id+'/trash',"
+        "{method:'POST',headers:{Authorization:'Bearer '+t}});"
+        "el.style.opacity='.3';btn.textContent='\u2713 Deleted';"
+        "}catch(e){btn.textContent='Error';btn.disabled=false;}}"
+        "async function moveEmail(id,sel){"
+        "const lid=sel.value;if(!lid)return;"
+        "const el=sel.closest('.aitem');sel.disabled=true;"
+        "const lname=sel.options[sel.selectedIndex].text;"
+        "try{const t=await getGT();"
+        "await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/'+id+'/modify',"
+        "{method:'POST',headers:{Authorization:'Bearer '+t,'Content-Type':'application/json'},"
+        "body:JSON.stringify({addLabelIds:[lid],removeLabelIds:['INBOX']})});"
+        "el.style.opacity='.5';"
+        "const sp=document.createElement('span');sp.className='moved-tag';"
+        "sp.textContent='\u2192 '+lname;sel.parentNode.insertBefore(sp,sel.nextSibling);"
+        "sel.style.display='none';"
+        "}catch(e){sel.disabled=false;alert('Move failed: '+e.message);}}"
+        "function checkItem(cb){cb.closest('.aitem').classList.toggle('done',cb.checked);}"
+    )
+
+# ── Python helpers that build interactive HTML sections ─────────────────────────
+
+def _label_select(email_id, labels):
+    if not labels:
+        return ""
+    opts = "<option value=''>Move to label\u2026</option>"
+    for name, lid in sorted(labels.items()):
+        opts += f"<option value='{_e(lid)}'>{_e(name)}</option>"
+    return (f"<select class='lbl-select' onchange=\"moveEmail('{email_id}',this)\">"
+            + opts + "</select>")
+
+def _build_action_items_html(items, labels, show_move=False):
+    if not items:
+        return ""
+    rows = ""
+    for item in items:
+        eid  = item.get("id", "")
+        text = _e(item.get("text", ""))
+        meta = _e(item.get("from", ""))
+        move_btn = _label_select(eid, labels) if show_move else ""
+        rows += (
+            f"<div class='aitem' id='ai-{eid}'>"
+            f"<input type='checkbox' onchange='checkItem(this)'>"
+            f"<div class='aitem-body'>"
+            f"<div class='atext'>{text}</div>"
+            f"<div class='ameta'>{meta}</div>"
+            f"<div class='abtns'>"
+            f"<button class='btn-trash' onclick=\"trashEmail('{eid}',this)\">\U0001f5d1 Delete</button>"
+            f"{move_btn}"
+            f"</div></div></div>"
+        )
+    return rows
+
+needs_attn_html = ""
+if _needs_attn:
+    rows = _build_action_items_html(_needs_attn, _gmail_labels, show_move=True)
+    needs_attn_html = (
+        "<div class='card'>"
+        "<div class='sec-title'>&#9889; Needs attention today</div>"
+        + rows + "</div>"
+    )
+
+promos_html = ""
+if _promotions:
+    rows = _build_action_items_html(_promotions, {}, show_move=False)
+    promos_html = (
+        "<div class='card'>"
+        "<div class='sec-title'>&#127991; Promotions &amp; Deals</div>"
+        + rows + "</div>"
+    )
+
+notifs_html = ""
+if _notifications:
+    rows = _build_action_items_html(_notifications, {}, show_move=False)
+    notifs_html = (
+        "<div class='card'>"
+        "<div class='sec-title'>&#128276; Notifications</div>"
+        + rows + "</div>"
+    )
+
 inner_html = (
     "<!DOCTYPE html><html lang='en'><head>"
     "<meta charset='UTF-8'>"
@@ -164,9 +298,12 @@ inner_html = (
     "<div class='wrap'>"
     "<header><h1>&#9728;&#65039; Daily Digest</h1>"
     "<div class='dsub'>" + date_str + "</div></header>"
+    + needs_attn_html
+    + promos_html
+    + notifs_html +
     "<div id='digest'></div>"
     "</div>"
-    "<script>" + js + "</script>"
+    "<script>" + GMAIL_JS + js + "</script>"
     "</body></html>"
 )
 
