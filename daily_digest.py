@@ -128,60 +128,85 @@ def get_or_create_label(gmail, name):
     return created['id']
 
 
-def apply_inbox_actions(gmail, emails, summarized_label_id):
+def apply_inbox_actions(gmail, emails, summarized_label_id, ai_newsletter_ids):
+    """Archive AI newsletters; label everything else that's in the inbox."""
+    archived = 0
+    labeled  = 0
     for email in emails:
         if 'INBOX' not in email['label_ids']:
             continue
         try:
-            if email['is_newsletter']:
+            if email['id'] in ai_newsletter_ids:
                 gmail.users().messages().modify(
                     userId='me', id=email['id'],
                     body={'removeLabelIds': ['INBOX']}
                 ).execute()
+                archived += 1
             else:
                 gmail.users().messages().modify(
                     userId='me', id=email['id'],
                     body={'addLabelIds': [summarized_label_id]}
                 ).execute()
+                labeled += 1
         except HttpError as e:
             print(f'  Warning: could not modify {email["id"]}: {e}', file=sys.stderr)
+    print(f'  Archived {archived} AI newsletters, labeled {labeled} other emails')
 
 
 # ── Claude summarization ────────────────────────────────────────────────────────
 
 def build_digest_text(emails):
+    """Returns (digest_text, ai_newsletter_ids) where ai_newsletter_ids is a set of
+    email IDs Claude identified as AI-focused newsletters to archive."""
     client = anthropic.Anthropic(api_key=os.environ['ANTHROPIC_API_KEY'])
     date_str = datetime.now().strftime('%A, %B %-d, %Y')
     total    = len(emails)
 
-    # Build the email list for Claude
+    # Build the email list for Claude, keyed by index
     lines = []
     for i, e in enumerate(emails, 1):
         lines.append(
             f"[{i}] FROM: {e['from']}\n"
             f"SUBJECT: {e['subject']}\n"
-            f"TYPE: {'Newsletter/Bulk' if e['is_newsletter'] else 'Regular'}\n"
             f"BODY:\n{e['body']}\n"
         )
     emails_text = '\n---\n'.join(lines)
 
     prompt = f"""You are generating a daily email digest for {date_str}.
-Here are {total} emails received in the last 24 hours.
+
+ABOUT ME: I am a Product Manager at Vanguard building AI-powered tools for Portfolio Managers.
+I am also an AI practitioner who wants to stay current on what's new, cool, and useful in AI —
+models, tools, frameworks, agents, anything that could make my work better or faster.
+
+Here are {total} emails received in the last 24 hours:
 
 {emails_text}
 
-Produce a digest in EXACTLY the following format.
-Sections are separated by a line containing only three dashes (---).
-Do not add any text before the first section or after the last.
-Omit any section entirely (including its --- separator) if there is nothing to put in it.
+Your response must start with a machine-readable classification line, then the digest.
 
-=== FORMAT ===
+=== STEP 1: CLASSIFICATION LINE (required, first line of your response) ===
+
+Output exactly one line in this format — the indices of emails that are AI-focused newsletters:
+AI_NEWSLETTERS: 2,7,11
+
+- AI newsletters = any newsletter/bulk email primarily about AI, LLMs, machine learning,
+  AI agents, AI tools, or AI in business/finance. Examples: The Rundown AI, TLDR AI,
+  McKinsey AI insights, Ben's Bites, Import AI, The Batch, AI Breakfast, etc.
+- Do NOT include: cooking newsletters, book deals, school emails, general news,
+  financial news without AI focus, retail/shopping, or personal emails.
+- If no AI newsletters, output: AI_NEWSLETTERS: none
+
+=== STEP 2: DIGEST (immediately after the classification line, no blank line) ===
+
+Produce the digest in EXACTLY the following format.
+Sections are separated by a line containing only three dashes (---).
+Omit any section (including its --- separator) if there is nothing to put in it.
 
 DAILY DIGEST — {date_str}
 {total} emails scanned, last 24 hours
 
 EMAIL COUNT BY CATEGORY
-Newsletters: N emails
+AI Newsletters: N emails
 Work: N emails
 Personal: N emails
 Books & Reading: N emails
@@ -194,53 +219,49 @@ Other: N emails
 ---
 
 NEEDS ATTENTION
-- [One specific, actionable item per line — things genuinely requiring a reply or decision today]
-- [Only include if there are real action items]
+- [Specific, actionable items only — replies needed, decisions, deadlines]
 
 ---
 
-NEWSLETTERS — Summaries
-[For each newsletter with substantive content:]
+AI NEWSLETTERS — What You Need to Know
+[Only AI-focused newsletters go here. Two lenses for every summary:]
+[1. PM at Vanguard building tools for Portfolio Managers — what's relevant to your work?]
+[2. AI Practitioner — what's new/cool/useful you'd want to know about?]
+
 Sender Name -- "Subject or topic"
-2-3 sentence summary of the key content or insight.
+[PM angle: 1-2 sentences on how this applies to your work at Vanguard]
+[AI angle: 1-2 sentences on what's cool or new for an AI practitioner]
 
 ---
 
 BOOKS & READING
-[BookBub deals, NYT books, reading recommendations, book newsletters, library emails, etc.]
 Source Name -- "Title or Deal"
-Brief description — genre, why it's interesting, price if it's a deal.
+Brief note — genre, why interesting, price if a deal.
 
 ---
 
 FOOD & RECIPES
-[Recipe newsletters, cooking tips, restaurant deals, food content, meal planning, etc.]
 Source Name -- "Dish or Topic"
-1-2 sentence description of the recipe or food content.
+1-2 sentence description.
 
 ---
 
 KIDS & FAMILY
-[School emails, kids activities, family events, parenting content, kids deals, etc.]
-- [Bullet point summary of each relevant item]
+- [Bullet point per relevant item]
 
 ---
 
 REGULAR EMAIL SUMMARY
-[Short grouped summary of remaining non-newsletter emails that don't need action.
-Use bullet points grouped by theme, e.g. Work Updates, Notifications, etc.]
-
-=== END FORMAT ===
+[Remaining emails grouped by theme, bullet points]
 
 Rules:
-- Keep summaries tight and useful.
-- Only flag real action items in NEEDS ATTENTION (replies needed, decisions, deadlines).
-- Skip promotional emails with no real content.
-- Use the exact --- separator lines between sections.
-- If a section has no emails, omit it completely — do not include an empty section.
+- Keep everything tight and useful.
+- Only flag real action items in NEEDS ATTENTION.
+- Skip pure promotional emails with no real content.
+- Use exact --- separators between sections.
+- Omit empty sections entirely.
 """
 
-    # Use streaming (large input) and get the final message text
     with client.messages.stream(
         model=CLAUDE_MODEL,
         max_tokens=4096,
@@ -249,7 +270,31 @@ Rules:
     ) as stream:
         final = stream.get_final_message()
 
-    return ''.join(b.text for b in final.content if b.type == 'text')
+    raw = ''.join(b.text for b in final.content if b.type == 'text')
+
+    # Parse the AI_NEWSLETTERS classification line off the top
+    ai_newsletter_ids = set()
+    lines_out = raw.splitlines()
+    digest_lines = []
+    for i, line in enumerate(lines_out):
+        if line.startswith('AI_NEWSLETTERS:'):
+            value = line.split(':', 1)[1].strip()
+            if value.lower() != 'none':
+                try:
+                    indices = [int(x.strip()) for x in value.split(',') if x.strip().isdigit()]
+                    # Map 1-based indices back to email IDs
+                    for idx in indices:
+                        if 1 <= idx <= len(emails):
+                            ai_newsletter_ids.add(emails[idx - 1]['id'])
+                except ValueError:
+                    pass
+            digest_lines = lines_out[i + 1:]
+            break
+    else:
+        digest_lines = lines_out  # No classification line found, use everything
+
+    digest_text = '\n'.join(digest_lines).lstrip('\n')
+    return digest_text, ai_newsletter_ids
 
 
 # ── HTML generation ─────────────────────────────────────────────────────────────
@@ -304,15 +349,14 @@ def main():
                 print(f'  Warning: skipping {ref["id"]}: {e}', file=sys.stderr)
         print(f'  Fetched {len(emails)} emails\n')
 
+        print('Generating digest with Claude...')
+        digest_text, ai_newsletter_ids = build_digest_text(emails)
+        print(f'  Done — {len(ai_newsletter_ids)} AI newsletters identified\n')
+
         print('Applying inbox actions...')
         label_id = get_or_create_label(gmail, SUMMARIZED_LABEL)
-        apply_inbox_actions(gmail, emails, label_id)
-        newsletters = sum(1 for e in emails if e['is_newsletter'])
-        print(f'  Archived {newsletters} newsletters, labeled {len(emails)-newsletters} regular emails\n')
-
-        print('Generating digest with Claude...')
-        digest_text = build_digest_text(emails)
-        print('  Done\n')
+        apply_inbox_actions(gmail, emails, label_id, ai_newsletter_ids)
+        print()
 
     print('Building encrypted index.html...')
     write_index_html(digest_text)
