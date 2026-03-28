@@ -276,8 +276,7 @@ REGULAR EMAIL SUMMARY
 
     with client.messages.stream(
         model=CLAUDE_MODEL,
-        max_tokens=4096,
-        thinking={'type': 'adaptive'},
+        max_tokens=8192,
         messages=[{'role': 'user', 'content': prompt}],
     ) as stream:
         final = stream.get_final_message()
