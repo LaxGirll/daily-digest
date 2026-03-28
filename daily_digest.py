@@ -294,7 +294,7 @@ def _parse_claude_output(raw, emails):
     promotions        = []
     notifications     = []
     section           = None
-    header_end        = len(lines)
+    header_end        = None   # None means END_HEADER not found yet
 
     for i, line in enumerate(lines):
         s = line.strip()
@@ -339,7 +339,15 @@ def _parse_claude_output(raw, emails):
             except (ValueError, IndexError):
                 pass
 
-    digest_text = '\n'.join(lines[header_end:]).lstrip('\n')
+    if header_end is not None:
+        digest_text = '\n'.join(lines[header_end:]).lstrip('\n')
+    else:
+        # END_HEADER not found — use the full raw output as digest text
+        print('  Warning: END_HEADER not found in Claude output, using full response',
+              file=sys.stderr)
+        digest_text = raw.lstrip('\n')
+
+    print(f'  Digest text length: {len(digest_text)} chars')
     return digest_text, ai_newsletter_ids, needs_attention, promotions, notifications
 
 
