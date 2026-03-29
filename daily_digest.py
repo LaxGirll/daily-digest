@@ -222,7 +222,8 @@ END_HEADER
 
 Classification rules:
 - AI_NEWSLETTERS: newsletters primarily about AI, LLMs, ML, agents, AI tools, AI in business.
-  Examples: The Rundown AI, TLDR AI, McKinsey AI, Ben's Bites, The Batch, Import AI, etc.
+  Examples: The Rundown AI, TLDR AI, McKinsey (any edition), Ben's Bites, The Batch, Import AI,
+  Superhuman (the AI productivity newsletter), etc.
   NOT: general news, cooking, books, finance without AI focus.
 - NEEDS_ATTENTION: emails genuinely needing a reply or decision TODAY. Be selective.
 - PROMOTIONS: sales, discount codes, retail offers, deal emails.
