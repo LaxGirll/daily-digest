@@ -47,6 +47,9 @@ try:
     _notifications = _data.get("notifications", [])
     _gmail_labels  = _data.get("gmail_labels", {})
     _total_emails  = _data.get("total_emails", 0)
+    _books         = _data.get("books", [])
+    _food          = _data.get("food", [])
+    _kids          = _data.get("kids", [])
 except (json.JSONDecodeError, TypeError):
     digest_text    = raw_input
     _gmail_creds   = {}
@@ -55,6 +58,9 @@ except (json.JSONDecodeError, TypeError):
     _notifications = []
     _gmail_labels  = {}
     _total_emails  = 0
+    _books         = []
+    _food          = []
+    _kids          = []
 
 date_str = datetime.now().strftime("%A, %B %-d, %Y")
 
@@ -129,26 +135,7 @@ CSS = (
 # Raw string so backslashes pass through to JavaScript unchanged
 JS_TMPL = r"""var D=PAYLOAD_JSON;
 function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
-function rIntro(sec){
-  var lines=sec.split('\n'),inC=false,rows='',esub='';
-  lines.forEach(function(l){
-    var t=l.trim();if(!t)return;
-    if(/^DAILY DIGEST/.test(t))return;
-    if(/^\d+ emails? scanned/i.test(t)){esub=t;return;}
-    if(/^EMAIL COUNT BY CATEGORY/i.test(t)){inC=true;return;}
-    if(inC){
-      var m=t.match(/^(.+?):\s+(\d+)\s+(\S+)(.*?)(?:\s+<-\s+(.+))?$/);
-      if(m){
-        var h=m[5]?' hot':'',s=m[5]?' \u2605':'';
-        rows+='<div class="count-row"><span class="cat-name">'+esc(m[1])+'</span>'
-          +'<span class="badge'+h+'">'+esc(m[2])+' '+esc(m[3])+s+'</span></div>';
-      }
-    }
-  });
-  if(!rows)return'';
-  return'<div class="card"><div class="sec-title">Email counts</div>'
-    +(esub?'<div class="email-sub">'+esc(esub)+'</div>':'')+rows+'</div>';
-}
+function rIntro(t){return '';}
 function rAttn(body){
   var items='';
   body.split('\n').forEach(function(l){
@@ -353,6 +340,36 @@ if _notifications:
         + rows + "</div>"
     )
 
+def _build_books_html(items, labels):
+    if not items:
+        return ''
+    rows = _build_action_items_html(items, labels, show_move=True)
+    return (
+        "<div class='card'>"
+        "<div class='sec-title'>&#128218; Books &amp; Reading</div>"
+        + rows + "</div>"
+    )
+
+def _build_food_html(items, labels):
+    if not items:
+        return ''
+    rows = _build_action_items_html(items, labels, show_move=True)
+    return (
+        "<div class='card'>"
+        "<div class='sec-title'>&#127859; Food &amp; Recipes</div>"
+        + rows + "</div>"
+    )
+
+def _build_kids_html(items, labels):
+    if not items:
+        return ''
+    rows = _build_action_items_html(items, labels, show_move=True)
+    return (
+        "<div class='card'>"
+        "<div class='sec-title'>&#128106; Kids &amp; Family</div>"
+        + rows + "</div>"
+    )
+
 counts_html = build_counts_html(
     _total_emails,
     len(_needs_attn),
@@ -375,8 +392,11 @@ inner_html = (
     + "<div class='card'><div class='sec-title'>&#128203; To Do</div><div id='todo-list'></div></div>"
     + needs_attn_html
     + notifs_html
-    + "<div id='digest'></div>"
+    + _build_books_html(_books, _gmail_labels)
+    + _build_food_html(_food, _gmail_labels)
+    + _build_kids_html(_kids, _gmail_labels)
     + promos_html
+    + "<div id='digest'></div>"
     + "</div>"
     "<script>" + GMAIL_JS + js + "</script>"
     "</body></html>"

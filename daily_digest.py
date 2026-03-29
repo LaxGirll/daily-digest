@@ -178,7 +178,7 @@ def apply_inbox_actions(gmail, emails, summarized_label_id, ai_newsletter_ids):
 # ── Claude summarization ────────────────────────────────────────────────────────
 
 def build_digest(emails):
-    """Returns (digest_text, ai_newsletter_ids, needs_attention, promotions, notifications)."""
+    """Returns (digest_text, ai_newsletter_ids, needs_attention, promotions, notifications, books, food, kids)."""
     client   = anthropic.Anthropic(api_key=os.environ['ANTHROPIC_API_KEY'])
     date_str = datetime.now().strftime('%A, %B %-d, %Y')
     total    = len(emails)
@@ -210,6 +210,12 @@ PROMOTIONS:
 [index]|[Sender] -- [deal or offer, include any discount amount/deadline]
 NOTIFICATIONS:
 [index]|[Sender] -- [what the notification is about]
+BOOKS:
+[index]|[Sender] -- [title or deal description]
+FOOD:
+[index]|[Sender] -- [dish or recipe description]
+KIDS:
+[index]|[Sender] -- [description]
 END_HEADER
 
 Classification rules:
@@ -219,26 +225,16 @@ Classification rules:
 - NEEDS_ATTENTION: emails genuinely needing a reply or decision TODAY. Be selective.
 - PROMOTIONS: sales, discount codes, retail offers, deal emails.
 - NOTIFICATIONS: automated alerts — bank statements, shipping updates, receipts, app alerts.
+- BOOKS: BookBub deals, NYT books, reading recommendations, library emails, book newsletters.
+- FOOD: NYT Cooking, recipe newsletters, restaurant content, meal ideas, food/cooking emails.
+- KIDS: school emails, kids activities, family events, parenting content.
 - Each email goes in at most ONE category. Omit a section if empty.
 
 === PART 2: DIGEST TEXT (output immediately after END_HEADER) ===
 
-Do NOT include Needs Attention, Promotions, or Notifications here — those are handled separately.
+Do NOT include Needs Attention, Promotions, Notifications, Books, Food, or Kids here — those are all handled separately via the structured header.
+Start directly with the first --- separator. Do NOT include a "DAILY DIGEST" intro line or "EMAIL COUNT BY CATEGORY" section.
 Sections separated by lines with only three dashes (---). Omit empty sections entirely.
-
-DAILY DIGEST — {date_str}
-{total} emails scanned, last 24 hours
-
-EMAIL COUNT BY CATEGORY
-AI Newsletters: N emails
-Work: N emails
-Personal: N emails
-Books & Reading: N emails
-Food & Recipes: N emails
-Kids & Family: N emails
-Promotions: N emails
-Notifications: N emails
-Other: N emails
 
 ---
 
@@ -247,26 +243,6 @@ AI NEWSLETTERS — What You Need to Know
 Sender Name -- "Subject or topic"
 PM angle: How this applies to building AI tools at Vanguard for Portfolio Managers.
 AI angle: What's new or cool here for an AI practitioner.
-
----
-
-BOOKS & READING
-[BookBub deals, NYT books, reading recommendations, library emails.]
-Source -- "Title or Deal"
-Brief note — genre, why interesting, price if a deal.
-
----
-
-FOOD & RECIPES
-[NYT Cooking, recipe newsletters, restaurant content, meal ideas.]
-Source -- "Dish or Topic"
-1-2 sentence description.
-
----
-
-KIDS & FAMILY
-[School emails, kids activities, family events, parenting content.]
-- Bullet per item
 
 ---
 
@@ -292,6 +268,9 @@ def _parse_claude_output(raw, emails):
     needs_attention   = []
     promotions        = []
     notifications     = []
+    books             = []
+    food              = []
+    kids              = []
     section           = None
     header_end        = None   # None means END_HEADER not found yet
 
@@ -313,6 +292,12 @@ def _parse_claude_output(raw, emails):
             section = 'promo'
         elif s == 'NOTIFICATIONS:':
             section = 'notif'
+        elif s == 'BOOKS:':
+            section = 'books'
+        elif s == 'FOOD:':
+            section = 'food'
+        elif s == 'KIDS:':
+            section = 'kids'
         elif s == 'END_HEADER':
             header_end = i + 1
             break
@@ -335,6 +320,12 @@ def _parse_claude_output(raw, emails):
                         promotions.append(item)
                     elif section == 'notif':
                         notifications.append(item)
+                    elif section == 'books':
+                        books.append(item)
+                    elif section == 'food':
+                        food.append(item)
+                    elif section == 'kids':
+                        kids.append(item)
             except (ValueError, IndexError):
                 pass
 
@@ -347,12 +338,12 @@ def _parse_claude_output(raw, emails):
         digest_text = raw.lstrip('\n')
 
     print(f'  Digest text length: {len(digest_text)} chars')
-    return digest_text, ai_newsletter_ids, needs_attention, promotions, notifications
+    return digest_text, ai_newsletter_ids, needs_attention, promotions, notifications, books, food, kids
 
 
 # ── HTML generation ─────────────────────────────────────────────────────────────
 
-def write_index_html(digest_text, needs_attention, promotions, notifications, gmail_labels, total_emails=0):
+def write_index_html(digest_text, needs_attention, promotions, notifications, gmail_labels, total_emails=0, books=None, food=None, kids=None):
     payload = json.dumps({
         'digest_text':    digest_text,
         'gmail_creds': {
@@ -365,6 +356,9 @@ def write_index_html(digest_text, needs_attention, promotions, notifications, gm
         'notifications':   notifications,
         'gmail_labels':    gmail_labels,
         'total_emails':    total_emails,
+        'books':           books or [],
+        'food':            food or [],
+        'kids':            kids or [],
     })
 
     result = subprocess.run(
@@ -419,10 +413,11 @@ def main():
     print()
 
     print('Generating digest with Claude...')
-    digest_text, ai_newsletter_ids, needs_attention, promotions, notifications = build_digest(emails)
+    digest_text, ai_newsletter_ids, needs_attention, promotions, notifications, books, food, kids = build_digest(emails)
     print(f'  Done — {len(ai_newsletter_ids)} AI newsletters, '
           f'{len(needs_attention)} action items, '
-          f'{len(promotions)} promos, {len(notifications)} notifications\n')
+          f'{len(promotions)} promos, {len(notifications)} notifications, '
+          f'{len(books)} books, {len(food)} food, {len(kids)} kids\n')
 
     print('Applying inbox actions...')
     label_id = get_or_create_label(gmail, SUMMARIZED_LABEL)
@@ -434,7 +429,7 @@ def main():
     print(f'  Found {len(gmail_labels)} user labels\n')
 
     print('Building encrypted index.html...')
-    write_index_html(digest_text, needs_attention, promotions, notifications, gmail_labels, total_emails=len(emails))
+    write_index_html(digest_text, needs_attention, promotions, notifications, gmail_labels, total_emails=len(emails), books=books, food=food, kids=kids)
 
     print('\nAll done.')
 
