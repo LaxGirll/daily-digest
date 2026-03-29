@@ -50,6 +50,7 @@ try:
     _books         = _data.get("books", [])
     _food          = _data.get("food", [])
     _kids          = _data.get("kids", [])
+    _regular       = _data.get("regular", [])
 except (json.JSONDecodeError, TypeError):
     digest_text    = raw_input
     _gmail_creds   = {}
@@ -61,6 +62,7 @@ except (json.JSONDecodeError, TypeError):
     _books         = []
     _food          = []
     _kids          = []
+    _regular       = []
 
 date_str = datetime.now().strftime("%A, %B %-d, %Y")
 
@@ -94,8 +96,6 @@ CSS = (
     ".aitem{display:flex;align-items:flex-start;gap:10px;padding:10px 0;"
     "border-bottom:1px solid #f0f0f0;transition:opacity .3s;}"
     ".aitem:last-child{border-bottom:none;}"
-    ".aitem.done .atext{text-decoration:line-through;color:#aaa;}"
-    ".aitem input[type=checkbox]{margin-top:3px;width:16px;height:16px;flex-shrink:0;cursor:pointer;}"
     ".aitem-body{flex:1;min-width:0;}"
     ".atext{font-size:.88rem;line-height:1.5;color:#1a1a2e;}"
     ".ameta{font-size:.75rem;color:#aaa;margin-top:2px;}"
@@ -227,7 +227,6 @@ if _gmail_creds:
         "sp.textContent='\u2192 '+lname;sel.parentNode.insertBefore(sp,sel.nextSibling);"
         "sel.style.display='none';"
         "}catch(e){sel.disabled=false;alert('Move failed: '+e.message);}}"
-        "function checkItem(cb){cb.closest('.aitem').classList.toggle('done',cb.checked);}"
         "var _TK='dd_todos';"
         "function _lt(){try{return JSON.parse(localStorage.getItem(_TK))||[];}catch{return[];}}"
         "function _st(t){localStorage.setItem(_TK,JSON.stringify(t));}"
@@ -301,7 +300,6 @@ def _build_action_items_html(items, labels, show_move=False):
         todo_btn = f"<button class='btn-todo' onclick=\"addToTodo('{esc(item['text'])}',this)\">\u2795 To&nbsp;Do</button>"
         rows += (
             f"<div class='aitem' id='ai-{eid}'>"
-            f"<input type='checkbox' onchange='checkItem(this)'>"
             f"<div class='aitem-body'>"
             f"<div class='atext'>{text}</div>"
             f"<div class='ameta'>{meta}</div>"
@@ -370,6 +368,16 @@ def _build_kids_html(items, labels):
         + rows + "</div>"
     )
 
+def _build_regular_html(items, labels):
+    if not items:
+        return ''
+    rows = _build_action_items_html(items, labels, show_move=True)
+    return (
+        "<div class='card'>"
+        "<div class='sec-title'>&#128233; Regular Emails</div>"
+        + rows + "</div>"
+    )
+
 counts_html = build_counts_html(
     _total_emails,
     len(_needs_attn),
@@ -396,6 +404,7 @@ inner_html = (
     + _build_food_html(_food, _gmail_labels)
     + _build_kids_html(_kids, _gmail_labels)
     + promos_html
+    + _build_regular_html(_regular, _gmail_labels)
     + "<div id='digest'></div>"
     + "</div>"
     "<script>" + GMAIL_JS + js + "</script>"
