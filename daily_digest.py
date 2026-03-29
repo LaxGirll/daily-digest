@@ -352,7 +352,7 @@ def _parse_claude_output(raw, emails):
 
 # ── HTML generation ─────────────────────────────────────────────────────────────
 
-def write_index_html(digest_text, needs_attention, promotions, notifications, gmail_labels):
+def write_index_html(digest_text, needs_attention, promotions, notifications, gmail_labels, total_emails=0):
     payload = json.dumps({
         'digest_text':    digest_text,
         'gmail_creds': {
@@ -364,6 +364,7 @@ def write_index_html(digest_text, needs_attention, promotions, notifications, gm
         'promotions':      promotions,
         'notifications':   notifications,
         'gmail_labels':    gmail_labels,
+        'total_emails':    total_emails,
     })
 
     result = subprocess.run(
@@ -433,7 +434,7 @@ def main():
     print(f'  Found {len(gmail_labels)} user labels\n')
 
     print('Building encrypted index.html...')
-    write_index_html(digest_text, needs_attention, promotions, notifications, gmail_labels)
+    write_index_html(digest_text, needs_attention, promotions, notifications, gmail_labels, total_emails=len(emails))
 
     print('\nAll done.')
 

@@ -46,6 +46,7 @@ try:
     _promotions    = _data.get("promotions", [])
     _notifications = _data.get("notifications", [])
     _gmail_labels  = _data.get("gmail_labels", {})
+    _total_emails  = _data.get("total_emails", 0)
 except (json.JSONDecodeError, TypeError):
     digest_text    = raw_input
     _gmail_creds   = {}
@@ -53,6 +54,7 @@ except (json.JSONDecodeError, TypeError):
     _promotions    = []
     _notifications = []
     _gmail_labels  = {}
+    _total_emails  = 0
 
 date_str = datetime.now().strftime("%A, %B %-d, %Y")
 
@@ -110,6 +112,18 @@ CSS = (
     ".pm strong{display:block;margin-bottom:4px;font-size:.72rem;text-transform:uppercase;"
     "letter-spacing:.08em;color:#4f46e5;}"
     ".pre-body{white-space:pre-wrap;font-size:.88rem;color:#444;line-height:1.7;}"
+    # Counts card
+    ".counts-grid{display:grid;grid-template-columns:1fr auto;gap:4px 16px;font-size:.85rem;}"
+    ".counts-grid span:nth-child(even){font-weight:600;text-align:right;}"
+    # Todo buttons and clear
+    ".btn-todo{background:#f0fdf4;color:#16a34a;border:1px solid #bbf7d0;"
+    "border-radius:6px;padding:3px 10px;font-size:.75rem;cursor:pointer;white-space:nowrap;}"
+    ".btn-todo:hover{background:#dcfce7;}"
+    ".btn-todo:disabled{opacity:.5;cursor:default;}"
+    ".btn-clear{background:none;border:none;color:#aaa;font-size:.75rem;cursor:pointer;"
+    "padding:2px 6px;border-radius:4px;}"
+    ".btn-clear:hover{background:#f5f5f5;color:#666;}"
+    ".todo-empty{color:#aaa;font-size:.85rem;padding:8px 0;}"
 )
 
 # Raw string so backslashes pass through to JavaScript unchanged
@@ -188,6 +202,7 @@ function renderDigest(raw){
   });
   return html;
 }
+renderTodos();
 document.getElementById('digest').innerHTML=renderDigest(D);"""
 
 js = JS_TMPL.replace('PAYLOAD_JSON', json.dumps(digest_text))
@@ -226,9 +241,57 @@ if _gmail_creds:
         "sel.style.display='none';"
         "}catch(e){sel.disabled=false;alert('Move failed: '+e.message);}}"
         "function checkItem(cb){cb.closest('.aitem').classList.toggle('done',cb.checked);}"
+        "var _TK='dd_todos';"
+        "function _lt(){try{return JSON.parse(localStorage.getItem(_TK))||[];}catch{return[];}}"
+        "function _st(t){localStorage.setItem(_TK,JSON.stringify(t));}"
+        "function addToTodo(txt,btn){"
+        "var t=_lt();"
+        "t.unshift({id:Date.now(),text:txt,done:false,added:new Date().toLocaleDateString()});"
+        "_st(t);renderTodos();"
+        "btn.textContent='\u2713 Added';btn.disabled=true;}"
+        "function toggleTodo(id){"
+        "var t=_lt(),item=t.find(function(x){return x.id===id;});"
+        "if(item)item.done=!item.done;_st(t);renderTodos();}"
+        "function deleteTodo(id){_st(_lt().filter(function(x){return x.id!==id;}));renderTodos();}"
+        "function clearDone(){_st(_lt().filter(function(x){return !x.done;}));renderTodos();}"
+        "function renderTodos(){"
+        "var el=document.getElementById('todo-list');if(!el)return;"
+        "var t=_lt();"
+        "if(!t.length){el.innerHTML='<p class=\"todo-empty\">Nothing here yet \u2014 hit \u2795 To\u00a0Do on any item.</p>';return;}"
+        "var done=t.filter(function(x){return x.done;}).length;"
+        "var cb=done?'<button class=\"btn-clear\" onclick=\"clearDone()\">Clear '+done+' done</button>':'';"
+        "el.innerHTML=t.map(function(x){"
+        "return '<div class=\"aitem'+(x.done?' done':'')+'\" id=\"td-'+x.id+'\">' "
+        "+'<input type=\"checkbox\"'+(x.done?' checked':'')+' onchange=\"toggleTodo('+x.id+')\">' "
+        "+'<div class=\"aitem-body\"><div class=\"atext\">'+x.text+'</div>'"
+        "+'<div class=\"ameta\">Added '+x.added+'</div></div>'"
+        "+'<div class=\"abtns\"><button class=\"btn-trash\" onclick=\"deleteTodo('+x.id+')\">&#128465; Delete</button></div>'"
+        "+'</div>';"
+        "}).join('')+cb;}"
     )
 
 # ── Python helpers that build interactive HTML sections ─────────────────────────
+
+def esc(s):
+    """HTML-escape a string for use in JS string literals (single-quoted)."""
+    return html_mod.escape(str(s), quote=False).replace("'", "&#39;")
+
+def build_counts_html(total, n_attn, n_notifs, n_ai, n_promos):
+    other = max(0, total - n_attn - n_notifs - n_ai - n_promos)
+    rows = [
+        ("\U0001f4e7 Total emails scanned", total),
+        ("\u26a1 Needs attention", n_attn),
+        ("\U0001f514 Notifications", n_notifs),
+        ("\U0001f4f0 AI newsletters", n_ai),
+        ("\U0001f6d2 Promotions", n_promos),
+    ]
+    if other:
+        rows.append(("\U0001f4e9 Other", other))
+    cells = "".join(
+        f"<span>{label}</span><span>{count}</span>"
+        for label, count in rows
+    )
+    return f"<div class='card'><div class='sec-title'>\U0001f4ca Today's Inbox</div><div class='counts-grid'>{cells}</div></div>"
 
 def _label_select(email_id, labels):
     if not labels:
@@ -244,10 +307,11 @@ def _build_action_items_html(items, labels, show_move=False):
         return ""
     rows = ""
     for item in items:
-        eid  = item.get("id", "")
-        text = _e(item.get("text", ""))
-        meta = _e(item.get("from", ""))
+        eid      = item.get("id", "")
+        text     = _e(item.get("text", ""))
+        meta     = _e(item.get("from", ""))
         move_btn = _label_select(eid, labels) if show_move else ""
+        todo_btn = f"<button class='btn-todo' onclick=\"addToTodo('{esc(item['text'])}',this)\">\u2795 To&nbsp;Do</button>"
         rows += (
             f"<div class='aitem' id='ai-{eid}'>"
             f"<input type='checkbox' onchange='checkItem(this)'>"
@@ -257,6 +321,7 @@ def _build_action_items_html(items, labels, show_move=False):
             f"<div class='abtns'>"
             f"<button class='btn-trash' onclick=\"trashEmail('{eid}',this)\">\U0001f5d1 Delete</button>"
             f"{move_btn}"
+            f"{todo_btn}"
             f"</div></div></div>"
         )
     return rows
@@ -272,7 +337,7 @@ if _needs_attn:
 
 promos_html = ""
 if _promotions:
-    rows = _build_action_items_html(_promotions, {}, show_move=False)
+    rows = _build_action_items_html(_promotions, _gmail_labels, show_move=True)
     promos_html = (
         "<div class='card'>"
         "<div class='sec-title'>&#127991; Promotions &amp; Deals</div>"
@@ -281,12 +346,20 @@ if _promotions:
 
 notifs_html = ""
 if _notifications:
-    rows = _build_action_items_html(_notifications, {}, show_move=False)
+    rows = _build_action_items_html(_notifications, _gmail_labels, show_move=True)
     notifs_html = (
         "<div class='card'>"
         "<div class='sec-title'>&#128276; Notifications</div>"
         + rows + "</div>"
     )
+
+counts_html = build_counts_html(
+    _total_emails,
+    len(_needs_attn),
+    len(_notifications),
+    0,
+    len(_promotions),
+)
 
 inner_html = (
     "<!DOCTYPE html><html lang='en'><head>"
@@ -298,11 +371,13 @@ inner_html = (
     "<div class='wrap'>"
     "<header><h1>&#9728;&#65039; Daily Digest</h1>"
     "<div class='dsub'>" + date_str + "</div></header>"
+    + counts_html
+    + "<div class='card'><div class='sec-title'>&#128203; To Do</div><div id='todo-list'></div></div>"
     + needs_attn_html
+    + notifs_html
+    + "<div id='digest'></div>"
     + promos_html
-    + notifs_html +
-    "<div id='digest'></div>"
-    "</div>"
+    + "</div>"
     "<script>" + GMAIL_JS + js + "</script>"
     "</body></html>"
 )
