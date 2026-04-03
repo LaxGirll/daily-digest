@@ -51,6 +51,7 @@ try:
     _food          = _data.get("food", [])
     _kids          = _data.get("kids", [])
     _regular       = _data.get("regular", [])
+    _cleanup       = _data.get("cleanup", [])
 except (json.JSONDecodeError, TypeError):
     digest_text    = raw_input
     _gmail_creds   = {}
@@ -63,6 +64,7 @@ except (json.JSONDecodeError, TypeError):
     _food          = []
     _kids          = []
     _regular       = []
+    _cleanup       = []
 
 date_str = datetime.now().strftime("%A, %B %-d, %Y")
 
@@ -130,6 +132,8 @@ CSS = (
     "padding:2px 6px;border-radius:4px;}"
     ".btn-clear:hover{background:#f5f5f5;color:#666;}"
     ".todo-empty{color:#aaa;font-size:.85rem;padding:8px 0;}"
+    ".age-badge{display:inline-block;background:#f0f0f0;color:#888;font-size:.7rem;"
+    "border-radius:10px;padding:1px 8px;margin-right:6px;white-space:nowrap;}"
 )
 
 # Raw string so backslashes pass through to JavaScript unchanged
@@ -378,6 +382,36 @@ def _build_regular_html(items, labels):
         + rows + "</div>"
     )
 
+def _build_cleanup_html(items, labels):
+    if not items:
+        return ''
+    rows = ""
+    for item in items:
+        eid      = item.get("id", "")
+        age      = _e(item.get("age", ""))
+        sender   = _e(item.get("from", ""))
+        subject  = _e(item.get("subject", "(no subject)"))
+        move_btn = _label_select(eid, labels)
+        todo_txt = esc(item.get("from", "") + " — " + item.get("subject", ""))
+        todo_btn = f"<button class='btn-todo' onclick=\"addToTodo('{todo_txt}',this)\">\u2795 To&nbsp;Do</button>"
+        rows += (
+            f"<div class='aitem' id='cl-{eid}'>"
+            f"<div class='aitem-body'>"
+            f"<div class='atext'><span class='age-badge'>{age}</span>"
+            f"<strong>{sender}</strong> \u2014 {subject}</div>"
+            f"<div class='abtns'>"
+            f"<button class='btn-trash' onclick=\"trashEmail('{eid}',this)\">\U0001f5d1 Delete</button>"
+            f"{move_btn}"
+            f"{todo_btn}"
+            f"</div></div></div>"
+        )
+    return (
+        "<div class='card'>"
+        "<div class='sec-title'>&#129529; Inbox Cleanup \u2014 25 Older Emails</div>"
+        "<div style='font-size:.78rem;color:#aaa;margin-bottom:8px;'>Chipping away at your inbox \u2014 25 at a time.</div>"
+        + rows + "</div>"
+    )
+
 counts_html = build_counts_html(
     _total_emails,
     len(_needs_attn),
@@ -405,6 +439,7 @@ inner_html = (
     + _build_kids_html(_kids, _gmail_labels)
     + promos_html
     + _build_regular_html(_regular, _gmail_labels)
+    + _build_cleanup_html(_cleanup, _gmail_labels)
     + "<div id='digest'></div>"
     + "</div>"
     "<script>" + GMAIL_JS + js + "</script>"

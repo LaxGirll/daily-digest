@@ -22,6 +22,7 @@ import re
 import sys
 import subprocess
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 
 import anthropic
 from google.oauth2.credentials import Credentials
@@ -68,7 +69,7 @@ def fetch_recent_message_ids(gmail):
         q=f'after:{since_ts} -in:spam -in:trash',
         maxResults=MAX_EMAILS,
     ).execute()
-    return result.get('messages', [])
+    return result.get('messages', []), since_ts
 
 
 def get_message_detail(gmail, msg_id):
@@ -116,6 +117,70 @@ def fetch_user_labels(gmail):
         for lbl in labels
         if lbl.get('type') == 'user' and lbl['name'] != SUMMARIZED_LABEL
     }
+
+
+def fetch_cleanup_emails(gmail, since_ts, limit=25):
+    """Fetch up to limit inbox emails older than since_ts for inbox-zero cleanup."""
+    try:
+        results = gmail.users().messages().list(
+            userId='me',
+            q=f'in:INBOX before:{since_ts}',
+            maxResults=limit,
+        ).execute()
+    except HttpError as e:
+        print(f'  Warning: cleanup fetch failed: {e}', file=sys.stderr)
+        return []
+
+    ids = [m['id'] for m in results.get('messages', [])]
+    if not ids:
+        return []
+
+    cleanup = []
+    for mid in ids:
+        try:
+            msg = gmail.users().messages().get(
+                userId='me', id=mid, format='metadata',
+                metadataHeaders=['From', 'Subject', 'Date']
+            ).execute()
+            headers = {h['name']: h['value']
+                       for h in msg['payload'].get('headers', [])}
+            from_raw = headers.get('From', '')
+            # Extract display name: "Name <email>" → "Name", else raw
+            if '<' in from_raw:
+                display = from_raw.split('<')[0].strip().strip('"')
+            else:
+                display = from_raw.strip()
+            date_raw = headers.get('Date', '')
+            age_str  = _format_email_age(date_raw)
+            cleanup.append({
+                'id':      mid,
+                'from':    display or from_raw,
+                'subject': headers.get('Subject', '(no subject)'),
+                'age':     age_str,
+            })
+        except HttpError:
+            pass
+    return cleanup
+
+
+def _format_email_age(date_str):
+    """Return a human-readable age string like '3 days ago' or 'Mar 5'."""
+    if not date_str:
+        return ''
+    try:
+        from datetime import timezone
+        dt   = parsedate_to_datetime(date_str)
+        now  = datetime.now(timezone.utc)
+        days = (now - dt.astimezone(timezone.utc)).days
+        if days <= 0:
+            return 'today'
+        if days == 1:
+            return 'yesterday'
+        if days < 7:
+            return f'{days} days ago'
+        return dt.strftime('%b %-d')
+    except Exception:
+        return date_str[:10] if len(date_str) >= 10 else date_str
 
 
 def auto_trash_emails(gmail, emails):
@@ -352,7 +417,7 @@ def _parse_claude_output(raw, emails):
 
 # ── HTML generation ─────────────────────────────────────────────────────────────
 
-def write_index_html(digest_text, needs_attention, promotions, notifications, gmail_labels, total_emails=0, books=None, food=None, kids=None, regular=None):
+def write_index_html(digest_text, needs_attention, promotions, notifications, gmail_labels, total_emails=0, books=None, food=None, kids=None, regular=None, cleanup=None):
     payload = json.dumps({
         'digest_text':    digest_text,
         'gmail_creds': {
@@ -369,6 +434,7 @@ def write_index_html(digest_text, needs_attention, promotions, notifications, gm
         'food':            food or [],
         'kids':            kids or [],
         'regular':         regular or [],
+        'cleanup':         cleanup or [],
     })
 
     result = subprocess.run(
@@ -398,7 +464,7 @@ def main():
     gmail = get_gmail_service()
 
     print('Fetching message IDs from the last 24 hours...')
-    message_refs = fetch_recent_message_ids(gmail)
+    message_refs, since_ts = fetch_recent_message_ids(gmail)
     print(f'  Found {len(message_refs)} emails\n')
 
     if not message_refs:
@@ -439,8 +505,13 @@ def main():
     gmail_labels = fetch_user_labels(gmail)
     print(f'  Found {len(gmail_labels)} user labels\n')
 
+    print('Fetching inbox cleanup emails (older than 24 h)...')
+    cleanup_emails = fetch_cleanup_emails(gmail, since_ts, limit=25)
+    print(f'  Found {len(cleanup_emails)} older inbox emails for cleanup')
+    print()
+
     print('Building encrypted index.html...')
-    write_index_html(digest_text, needs_attention, promotions, notifications, gmail_labels, total_emails=len(emails), books=books, food=food, kids=kids, regular=regular)
+    write_index_html(digest_text, needs_attention, promotions, notifications, gmail_labels, total_emails=len(emails), books=books, food=food, kids=kids, regular=regular, cleanup=cleanup_emails)
 
     print('\nAll done.')
 
